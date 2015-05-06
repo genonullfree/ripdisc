@@ -1,0 +1,138 @@
+#!/bin/bash
+#
+#Author: Geno Nullfree
+#
+#Description: This script will rip a 1:1 backup iso of a dvd video. It will
+# first try to use the dvdbackup utility, and if that fails (some discs do,
+# some discs dont, I believe this is encryption related) it will attempt to
+# do a dd on the disc.
+#
+#Dependencies: dvdbackup dvd+rw-tools lsdvd libdvdcss pgrep
+#
+#If you have multiple disc drives and you wish to use multiple at the same time,
+# change /dev/sr0 to which dvd drive it is (i.e. 0, 1, 2, etc.)
+#
+#Usage: ripdisc [options]
+# -n "title"		Specify output .iso filename (Use quotation marks or escape spaces)
+# -t /path/to/tmpdir	Temp directory (Leave off trailing /)
+# -o /path/to/outdir	Output directory (Leave off trailing /)
+# -d <dvd device name>	DVD drive name (Only put sr#, not /dev/sr#. Replace # with drive number.)
+#
+#Lessons Learned:
+# How to use a case/switch statement
+# How to check a DVD's title
+# How to check a DVD's size
+# How to overwrite an echo line
+# How to monitor a child pid
+# How to catch a ctrl-c hit
+# How to shift the command line arguments
+
+#Initialize default variables
+drive=sr0
+outdir=/home/$USER
+tmpdir=/home/$USER/.ripdisc
+
+while (( "$#" )); do
+case $1 in
+    "-n")
+        title="$2"
+        settitle=1
+    ;;
+    "-t")
+        tmpdir="$2"
+    ;;
+    "-o")
+        if [ -d "$2" ]; then
+            outdir="$2"
+        else
+            echo 'Output directory does not exist.'
+            exit 4
+        fi
+    ;;
+    "-d")
+        drive="$2"
+    ;;
+    *)
+        echo "Usage: ripdisc [options]
+         -n \"title\"		Specify output .iso filename (Use quotation marks or escape spaces)
+         -t /path/to/tmpdir	Temp directory (Leave off trailing /)
+         -o /path/to/outdir	Output directory (Leave off trailing /)
+         -d <dvd device name>	DVD drive name (Only put sr#, not /dev/sr#. Replace # with drive number.)"
+        exit 2
+    ;;
+esac
+shift 2
+done
+
+#Display the default title and allow user to change it
+if [ -z $settitle ]; then
+    title=$(lsdvd /dev/$drive 2> /dev/null | awk '/Disc Title: / {print $3}')
+    echo 'Disc title is set to: '$title
+    echo -n 'Would you like to change it? (y/N) '
+    read changeTitle
+    if [[ $changeTitle == "Y" || $changeTitle == "y" ]]; then
+        echo -n 'Please enter the new name of the disc: '
+        read title
+    fi
+fi
+
+#Make sure tmpdir exists, and if not, create it
+if [ ! -d "$tmpdir" ]; then
+    mkdir -p "$tmpdir"
+fi
+
+#Remove any old data in tmpdir for this title
+if [ -d "$tmpdir/$title" ]; then
+    rm -rf "$tmpdir/$title"
+fi
+
+echo 'Disk name: '$title
+
+size=$(lsblk | grep $drive | awk '{print $4}')
+#echo 'Estimated '$title'.iso size: '$size
+
+echo 'Ripping disk...'
+
+ctrl_c(){
+    echo -e "\r\033[K*** Ctrl-C hit! ***"
+    if [ ! -z $cpid ]; then
+        echo 'Killing dvdbackup subprocess '$cpid
+        kill $cpid
+    fi
+    echo 'Cleaning up temp directory'
+    rm -rf "$tmpdir/$title"
+    echo 'Exiting...'
+    exit 3 
+}
+
+trap ctrl_c SIGINT
+
+dvdbackup -i /dev/"$drive" -M -o "$tmpdir" -n "$title" &> /dev/null &
+cpid=$!
+sleep 4
+while $(kill -0 "$cpid" &> /dev/null); do
+    sleep 1
+    echo -en "\r\033[K ~"$(du -sh "$tmpdir/$title" | awk '{print $1}')"/"$size" completed."
+done
+echo ''
+wait $cpid
+rc=$?
+eject -T /dev/"$drive"
+if [ $rc != 0 ]; then
+    echo "Primary method failed, attempting secondary copy (dd)..."
+    sudo dd if=/dev/"$drive" of="$tmpdir/$title.iso"
+    sudo chown $USER.$(id -gn $USER) "$tmpdir/$title.iso"
+    mv "$tmpdir/$title.iso" "$outdir/$title.iso"
+else
+    echo 'Generating ISO image...'
+    genisoimage -dvd-video -o "$outdir/$title.iso" "$tmpdir/$title" &> /dev/null
+    cpid=$!
+    sleep 4
+    while $(kill -0 "$cpid" &> /dev/null); do
+        sleep 1
+        echo -en "\r\033[K ~"$(du -sh "$outdir/$title.iso" | awk '{print $1}')"/"$size" completed."
+    done
+    echo ''
+    rm -rf "$tmpdir/$title"
+fi
+echo 'Final ISO size: '`du -sh "$outdir/$title.iso"`
