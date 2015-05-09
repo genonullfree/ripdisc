@@ -27,9 +27,15 @@ If you have multiple disc drives and you wish to use multiple at the same time, 
  
 # Lessons Learned:
 How to use a case/switch statement
+
 How to check a DVD's title
+
 How to check a DVD's size
+
 How to overwrite an echo line
+
 How to monitor a child pid
+
 How to catch a ctrl-c hit
+
 How to shift the command line arguments
